@@ -812,6 +812,8 @@ def eval_metric(dfs, dfs_type, sys_info, raw_pmc_df, debug):
     ammolite__numActiveCUs = ammolite__build_in["numActiveCUs"]
     ammolite__kernelBusyCycles = ammolite__build_in["kernelBusyCycles"]
     ammolite__hbmBandwidth = ammolite__build_in["hbmBandwidth"]
+    
+    pmc_perf = raw_pmc_df.get("pmc_perf")
 
     # Hmmm... apply + lambda should just work
     # df['Value'] = df['Value'].apply(lambda s: eval(compile(str(s), '<string>', 'eval')))
@@ -821,7 +823,7 @@ def eval_metric(dfs, dfs_type, sys_info, raw_pmc_df, debug):
                 for expr in df.columns:
                     if expr in schema.supported_field:
                         if expr.lower() != "alias":
-                            if row[expr]:
+                            if row_expr := row[expr]:
                                 if debug:  # debug won't impact the regular calc
                                     print("~" * 40 + "\nExpression:")
                                     print(expr, "=", row[expr])
@@ -881,9 +883,20 @@ def eval_metric(dfs, dfs_type, sys_info, raw_pmc_df, debug):
                                             )
                                         else:
                                             console_error("analysis", str(ae))
-
                                 try:
-                                    out = eval(compile(row[expr], "<string>", "eval"))
+                                    #     raw_pmc_df.get('pmc_perf').get(XYZ)
+                                    # --> raw_pmc_df_XYZ
+                                    # if "raw_pmc_df" in row_expr:
+                                        # fields = set(re.findall(r"raw_pmc_df.get\('pmc_perf'\).get\(\"([^\]]*?)\"\)", row_expr))
+                                        # for field in fields - found_fields:
+                                        #     stmt = f"raw_pmc_df_{field} = pmc_perf.get(\"{field}\")"
+                                        #     print(stmt)
+                                        #     exec(compile(stmt, "<string>", "exec"))
+                                        # found_fields = found_fields | fields
+
+                                    row_expr = row_expr.replace("raw_pmc_df.get('pmc_perf')", 'pmc_perf')
+                                    
+                                    out = eval(compile(row_expr, "<string>", "eval"))
 
                                     if np.isnan(out):
                                         row[expr] = ""

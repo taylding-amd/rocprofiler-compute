@@ -29,6 +29,8 @@
 import os
 import re
 import sys
+import cProfile
+import pstats
 
 # import logging
 from pathlib import Path
@@ -167,4 +169,6 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    cProfile.run('main()', "profile_output.prof")
+    stats = pstats.Stats("profile_output.prof")
+    stats.strip_dirs().sort_stats("cumulative").print_stats(10) # Print top 10 by cumulative time
