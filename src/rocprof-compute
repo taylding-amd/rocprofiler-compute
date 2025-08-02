@@ -171,4 +171,4 @@ def main():
 if __name__ == "__main__":
     cProfile.run('main()', "profile_output.prof")
     stats = pstats.Stats("profile_output.prof")
-    stats.strip_dirs().sort_stats("cumulative").print_stats(10) # Print top 10 by cumulative time
+    stats.strip_dirs().sort_stats("cumulative").print_stats(20) # Print top 10 by cumulative time

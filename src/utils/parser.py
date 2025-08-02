@@ -27,6 +27,7 @@ import json
 import re
 import sys
 import warnings
+import multiprocessing
 from collections import defaultdict
 from pathlib import Path
 
@@ -682,12 +683,46 @@ def build_metric_value_string(dfs, dfs_type, normal_unit):
         # print(tabulate(df, headers='keys', tablefmt='fancy_grid'))
 
 
+def init_metric_evaluator(_raw_pmc_df: dict, _ammolite_vars: dict) -> None:
+    global raw_pmc_df, __pmc_perf
+    raw_pmc_df = _raw_pmc_df
+    __pmc_perf = _raw_pmc_df.get("pmc_perf")
+    
+    globals().update(_ammolite_vars)
+    
+    
+def run_metric_evaluator(row_expr: str) -> str:
+    try:
+        row_expr = row_expr.replace("raw_pmc_df.get('pmc_perf')", '__pmc_perf')
+
+        out = eval(compile(row_expr, "<string>", "eval"))
+
+        if np.isnan(out):
+            return ""
+
+        else:
+            return out
+
+    except TypeError:
+        return ""
+
+    except AttributeError as ae:
+        if (
+            str(ae)
+            == "'NoneType' object has no attribute 'get'"
+        ):
+            return ""
+
+        else:
+            console_error("analysis", str(ae))
+
 @demarcate
 def eval_metric(dfs, dfs_type, sys_info, raw_pmc_df, debug):
     """
     Execute the expr string for each metric in the df.
     """
 
+    pmc_perf = raw_pmc_df.get('pmc_perf')
     # confirm no illogical counter values (only consider non-roofline runs)
     roof_only_run = sys_info.ip_blocks == "roofline"
     if (
@@ -813,8 +848,9 @@ def eval_metric(dfs, dfs_type, sys_info, raw_pmc_df, debug):
     ammolite__kernelBusyCycles = ammolite__build_in["kernelBusyCycles"]
     ammolite__hbmBandwidth = ammolite__build_in["hbmBandwidth"]
     
-    pmc_perf = raw_pmc_df.get("pmc_perf")
-
+    row_expr_indexes = []
+    row_exprs = []
+    
     # Hmmm... apply + lambda should just work
     # df['Value'] = df['Value'].apply(lambda s: eval(compile(str(s), '<string>', 'eval')))
     for id, df in dfs.items():
@@ -824,6 +860,9 @@ def eval_metric(dfs, dfs_type, sys_info, raw_pmc_df, debug):
                     if expr in schema.supported_field:
                         if expr.lower() != "alias":
                             if row_expr := row[expr]:
+                                row_expr_indexes.append((id, idx, expr))
+                                row_exprs.append(row_expr)
+
                                 if debug:  # debug won't impact the regular calc
                                     print("~" * 40 + "\nExpression:")
                                     print(expr, "=", row[expr])
@@ -883,42 +922,59 @@ def eval_metric(dfs, dfs_type, sys_info, raw_pmc_df, debug):
                                             )
                                         else:
                                             console_error("analysis", str(ae))
-                                try:
-                                    #     raw_pmc_df.get('pmc_perf').get(XYZ)
-                                    # --> raw_pmc_df_XYZ
-                                    # if "raw_pmc_df" in row_expr:
-                                        # fields = set(re.findall(r"raw_pmc_df.get\('pmc_perf'\).get\(\"([^\]]*?)\"\)", row_expr))
-                                        # for field in fields - found_fields:
-                                        #     stmt = f"raw_pmc_df_{field} = pmc_perf.get(\"{field}\")"
-                                        #     print(stmt)
-                                        #     exec(compile(stmt, "<string>", "exec"))
-                                        # found_fields = found_fields | fields
 
-                                    row_expr = row_expr.replace("raw_pmc_df.get('pmc_perf')", 'pmc_perf')
+                                # try:
+                                #     #     raw_pmc_df.get('pmc_perf').get(XYZ)
+                                #     # --> raw_pmc_df_XYZ
+                                #     # if "raw_pmc_df" in row_expr:
+                                #         # fields = set(re.findall(r"raw_pmc_df.get\('pmc_perf'\).get\(\"([^\]]*?)\"\)", row_expr))
+                                #         # for field in fields - found_fields:
+                                #         #     stmt = f"raw_pmc_df_{field} = pmc_perf.get(\"{field}\")"
+                                #         #     print(stmt)
+                                #         #     exec(compile(stmt, "<string>", "exec"))
+                                #         # found_fields = found_fields | fields
+
+                                #     # row_exprs.append((row_expr, dfs))
+                                #     row_expr = row_expr.replace("raw_pmc_df.get('pmc_perf')", 'pmc_perf')
                                     
-                                    out = eval(compile(row_expr, "<string>", "eval"))
+                                #     out = eval(compile(row_expr, "<string>", "eval"))
 
-                                    if np.isnan(out):
-                                        row[expr] = ""
-                                    else:
-                                        row[expr] = out
-                                except TypeError:
-                                    row[expr] = ""
-                                except AttributeError as ae:
-                                    if (
-                                        str(ae)
-                                        == "'NoneType' object has no attribute 'get'"
-                                    ):
-                                        row[expr] = ""
-                                    else:
-                                        console_error("analysis", str(ae))
+                                #     if np.isnan(out):
+                                #         row[expr] = ""
+                                #     else:
+                                #         row[expr] = out
+                                # except TypeError:
+                                #     row[expr] = ""
+                                # except AttributeError as ae:
+                                #     if (
+                                #         str(ae)
+                                #         == "'NoneType' object has no attribute 'get'"
+                                #     ):
+                                #         row[expr] = ""
+                                #     else:
+                                #         console_error("analysis", str(ae))
 
                             else:
                                 # If not insert nan, the whole col might be treated
                                 # as string but not nubmer if there is NONE
                                 row[expr] = ""
 
-            # print(tabulate(df, headers='keys', tablefmt='fancy_grid'))
+    ammolite_vars = {
+        key: val
+        for key, val in locals().items()
+        if key.startswith("ammolite__")
+    }
+
+    # Empirically, 8 is about as much as we need.
+    processes = min(16, multiprocessing.cpu_count())
+    print(f"Evaluating {len(row_exprs)} metrics using {processes} processes.")
+
+    with multiprocessing.Pool(processes=processes, initializer=init_metric_evaluator, initargs=(raw_pmc_df, ammolite_vars)) as pool:
+        outs = pool.map(run_metric_evaluator, row_exprs)
+
+    for (df_id, row, col), out in zip(row_expr_indexes, outs):
+        dfs[df_id].loc[row, col] = out
+
 
 
 @demarcate
